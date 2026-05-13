@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BillCheck - 스마트 가계부</title>
+    <!-- 필수 라이브러리 -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- ☁️ 진짜 클라우드 서버 직접 연결 (대표님 전용 Firebase) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // 대표님이 직접 만드신 파이어베이스 설정값
+        const firebaseConfig = {
+            apiKey: "AIzaSyAfgK1iOoEsDyR7fNif6g7vDk2R7y1gIDg",
+            authDomain: "billcheck-app.firebaseapp.com",
+            projectId: "billcheck-app",
+            storageBucket: "billcheck-app.firebasestorage.app",
+            messagingSenderId: "914726172858",
+            appId: "1:914726172858:web:d728ecc54bc6f6b88f2a83"
+        };
+
+        window.isFirebaseLoaded = false;
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            const appId = firebaseConfig.projectId;
+            
+            window.fb = { auth, db, appId, collection, doc, setDoc, deleteDoc, onSnapshot, query, signInAnonymously, onAuthStateChanged };
+        } catch (e) {
+            console.error("클라우드 초기화 실패:", e);
+        } finally {
+            window.isFirebaseLoaded = true;
+            window.dispatchEvent(new Event('firebaseLoaded'));
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800;900&display=swap');
+        body { font-family: 'Pretendard', sans-serif; overflow-x: hidden; background-color: #f8fafc; margin: 0; padding: 0; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+        
+        /* 세련된 UI 효과들 */
+        .glass-panel { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+        .gradient-primary { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); }
+        .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .gradient-card { background: linear-gradient(135deg, #1e1b4b 0%, #4338ca 100%); box-shadow: 0 20px 25px -5px rgba(67, 56, 202, 0.4), 0 10px 10px -5px rgba(67, 56, 202, 0.2); }
+        .gradient-success { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+        
+        .tab-active { background-color: #ffffff; color: #6366f1; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); border: 1px solid #eef2ff; }
+        .hover-scale { transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s ease; }
+        .hover-scale:active { transform: scale(0.96); }
+
+        /* 모바일 친화적 커스텀 체크박스 */
+        .custom-checkbox { width: 1.5rem; height: 1.5rem; border-radius: 0.5rem; border: 2px solid #cbd5e1; appearance: none; outline: none; cursor: pointer; transition: all 0.2s; position: relative; flex-shrink: 0; background: white; }
+        .custom-checkbox:checked { background-color: #6366f1; border-color: #6366f1; }
+        .custom-checkbox:checked::after { content: ''; position: absolute; left: 7px; top: 3px; width: 6px; height: 12px; border: solid white; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const spanRef = useRef(null);
+            useEffect(() => { 
+                if (window.lucide && spanRef.current) {
+                    spanRef.current.innerHTML = `<i data-lucide="${name}" class="${className}"></i>`;
+                    window.lucide.createIcons({ root: spanRef.current, attrs: { width: size, height: size } });
+                }
+            }, [name, size, className]);
+            return <span ref={spanRef} className={`inline-flex items-center justify-center shrink-0 ${className}`}></span>;
+        };
+
+        function useLocalStorage(key, initialValue) {
+            const [value, setValue] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(key);
+                    if (item === null) return initialValue;
+                    try { return JSON.parse(item); } catch (e) { return item; }
+                } catch (error) { return initialValue; }
+            });
+            useEffect(() => {
+                try { window.localStorage.setItem(key, JSON.stringify(value)); } catch (error) { console.error(error); }
+            }, [key, value]);
+            return [value, setValue];
+        }
+
+        // 실시간 동기화 훅
+        function useDataSync(colName, authReady, user, initialValue) {
+            const [data, setData] = useState(initialValue);
+
+            useEffect(() => {
+                if (!authReady) return;
+                if (window.fb && user) {
+                    const { db, appId, collection, onSnapshot } = window.fb;
+                    const q = collection(db, 'artifacts', appId, 'users', user.uid, colName);
+                    return onSnapshot(q, (snap) => {
+                        const items = snap.docs.map(d => ({ id: Number(d.id), ...d.data() }));
+                        setData(items.sort((a, b) => b.id - a.id));
+                    });
+                }
+            }, [colName, authReady, user]);
+
+            const addItem = async (item) => {
+                if (window.fb && user) {
+                    const { db, appId, doc, setDoc } = window.fb;
+                    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, item.id.toString()), item);
+                }
+            };
+
+            const updateItem = async (item) => {
+                if (window.fb && user) {
+                    const { db, appId, doc, setDoc } = window.fb;
+                    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, item.id.toString()), item);
+                }
+            };
+
+            const deleteItem = async (id) => {
+                if (window.fb && user) {
+                    const { db, appId, doc, deleteDoc } = window.fb;
+                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id.toString()));
+                }
+            };
+
+            const bulkDelete = async (ids) => {
+                if (window.fb && user) {
+                    const { db, appId, doc, deleteDoc } = window.fb;
+                    for (const id of ids) { 
+                        await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id.toString())); 
+                    }
+                }
+            };
+
+            return [data, addItem, updateItem, deleteItem, bulkDelete];
+        }
+
+        function App() {
+            const [authReady, setAuthReady] = useState(false);
+            const [user, setUser] = useState(null);
+
+            useEffect(() => {
+                const initFb = async () => {
+                    if (!window.fb) { setAuthReady(true); return; }
+                    try {
+                        const { auth, signInAnonymously, onAuthStateChanged } = window.fb;
+                        await signInAnonymously(auth);
+                        onAuthStateChanged(auth, (u) => { setUser(u); setAuthReady(true); });
+                    } catch(e) { console.error("인증 에러:", e); setAuthReady(true); }
+                };
+
+                if (window.isFirebaseLoaded) initFb();
+                else {
+                    window.addEventListener('firebaseLoaded', initFb);
+                    return () => window.removeEventListener('firebaseLoaded', initFb);
+                }
+            }, []);
+
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [passwordInput, setPasswordInput] = useState('');
+            const [savedPassword, setSavedPassword] = useLocalStorage('billcheck_password', '');
+            const [userInfo, setUserInfo] = useLocalStorage('billcheck_userinfo', null); 
+            const [showResetModal, setShowResetModal] = useState(false);
+
+            const [cardAccounts, addCard, updateCard, deleteCard, bulkDeleteCards] = useDataSync('cards', authReady, user, []);
+            const [transactions, addTx, updateTx, deleteTx, bulkDeleteTxs] = useDataSync('txs', authReady, user, []);
+            const [subscriptions, addSub, updateSub, deleteSub, bulkDeleteSubs] = useDataSync('subs', authReady, user, []);
+            const [installments, addInst, updateInst, deleteInst, bulkDeleteInsts] = useDataSync('insts', authReady, user, []);
+            const [cardPayments, addPayment, updatePayment, deletePayment, bulkDeletePayments] = useDataSync('payments', authReady, user, []);
+
+            useEffect(() => {
+                if (!user || !window.fb) return;
+                const { db, appId, doc, onSnapshot } = window.fb;
+                const unsub = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), (snap) => {
+                    if (snap.exists()) setUserInfo(snap.data());
+                });
+                return () => unsub();
+            }, [user]);
+
+            const [activeTab, setActiveTab] = useState('home');
+            const [usageType, setUsageType] = useState('가정용');
+            const [calendarDate, setCalendarDate] = useState(() => new Date());
+            const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+            const [selectedDateFilter, setSelectedDateFilter] = useState(null);
+
+            const [inputType, setInputType] = useState('expense');
+            const [inputDate, setInputDate] = useState(() => new Date().toISOString().split('T')[0]);
+            const [inputAmount, setInputAmount] = useState('');
+            const [inputCategory, setInputCategory] = useState('식비');
+            const [inputDesc, setInputDesc] = useState('');
+            const [inputInstitution, setInputInstitution] = useState('');
+            const [isPerformanceEligible, setIsPerformanceEligible] = useState(true);
+            const [newCardName, setNewCardName] = useState('');
+            const [newCardDay, setNewCardDay] = useState('');
+            const [newCardTarget, setNewCardTarget] = useState('');
+            
+            const [editFormData, setEditFormData] = useState(null); 
+            const [showAddSubModal, setShowAddSubModal] = useState(false); 
+            const [editSubFormData, setEditSubFormData] = useState(null); 
+            const [showAddInstModal, setShowAddInstModal] = useState(false);
+            const [editInstFormData, setEditInstFormData] = useState(null);
+            const [editCardFormData, setEditCardFormData] = useState(null);
+            
+            const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+            const [newPasswordInput, setNewPasswordInput] = useState('');
+            
+            const [selectedTxs, setSelectedTxs] = useState([]);
+            const [selectedSubs, setSelectedSubs] = useState([]);
+            const [selectedInsts, setSelectedInsts] = useState([]);
+            const [selectedCards, setSelectedCards] = useState([]);
+            const [selectedPayments, setSelectedPayments] = useState([]);
+
+            const formatKRW = (v) => new Intl.NumberFormat('ko-KR').format(v || 0) + '원';
+
+            const stats = useMemo(() => {
+                const targetTx = transactions.filter(tx => tx.type === usageType);
+                const targetSubs = subscriptions.filter(sub => sub.type === usageType);
+                const targetCards = cardAccounts.filter(card => card.type === usageType);
+                const targetInsts = installments.filter(inst => inst.type === usageType);
+                const targetPayments = cardPayments.filter(p => p.type === usageType);
+                
+                const income = targetTx.filter(tx => tx.isIncome).reduce((s, tx) => s + Number(tx.amount || 0), 0);
+                const expense = targetTx.filter(tx => !tx.isIncome).reduce((s, tx) => s + Number(tx.amount || 0), 0);
+                
+                const curYM = calendarDate.toISOString().substring(0, 7);
+                const cardPerf = targetCards.map(card => {
+                    const spent = targetTx.filter(tx => tx.date.startsWith(curYM) && tx.institution === card.name && !tx.isIncome && tx.isPerformanceEligible !== false)
+                        .reduce((s, tx) => s + Number(tx.amount || 0), 0);
+                    return { ...card, spent };
+                });
+
+                const catMap = {};
+                targetTx.filter(tx => !tx.isIncome).forEach(tx => { catMap[tx.category] = (catMap[tx.category] || 0) + Number(tx.amount || 0); });
+                const COLORS = ['#6366f1', '#a855f7', '#ec4899', '#f43f5e', '#f59e0b', '#10b981', '#0ea5e9'];
+                const catStats = Object.keys(catMap).map((k, i) => ({ name: k, value: catMap[k], color: COLORS[i % COLORS.length] })).sort((a, b) => b.value - a.value);
+                const totalPie = catStats.reduce((s, i) => s + i.value, 0);
+                let cum = 0;
+                const stops = catStats.map(i => { const p = totalPie===0?0:(i.value / totalPie) * 100; const s = `${i.color} ${cum}% ${cum+p}%`; cum+=p; return s; }).join(', ');
+
+                return { filteredTx: targetTx, totalIncome: income, totalExpense: expense, balance: income - expense, catStats, conicStops: stops, upcomingSubs: [...targetSubs].sort((a,b)=>a.day-b.day), cardPerf, filteredInsts: targetInsts, filteredPayments: targetPayments };
+            }, [transactions, subscriptions, cardAccounts, installments, cardPayments, usageType, calendarDate]);
+
+            const advices = useMemo(() => {
+                let res = [];
+                const today = new Date().getDate();
+                const immi = stats.upcomingSubs.filter(s => s.day >= today && s.day <= today + 5);
+                if (immi.length > 0) res.push({ type: 'warning', text: `5일 내 결제 예정: ${immi.length}건 (${formatKRW(immi.reduce((s,i)=>s+Number(i.amount||0),0))})` });
+                stats.cardPerf.forEach(c => {
+                    if (c.targetAmount > 0) {
+                        const ratio = c.spent / c.targetAmount;
+                        if (ratio >= 0.8 && ratio < 1) res.push({ type: 'tip', text: `✨ ${c.name} 혜택 달성 임박! (${formatKRW(c.targetAmount - c.spent)} 남음)` });
+                        else if (ratio >= 1) res.push({ type: 'success', text: `🎉 ${c.name} 실적 달성 완료! 혜택을 누리세요.` });
+                    }
+                });
+                const finInsts = stats.filteredInsts.filter(i => (i.totalMonths - i.paidMonths) > 0 && (i.totalMonths - i.paidMonths) <= 3);
+                if (finInsts.length > 0) res.push({ type: 'success', text: `🎉 '${finInsts[0].title}' 등 할부 완납이 머지않았습니다!` });
+                if (stats.totalExpense > stats.totalIncome * 0.8 && stats.totalIncome > 0) res.push({ type: 'danger', text: `🚨 이번 달 지출이 수입의 80%를 넘어섰습니다.` });
+                if (res.length === 0) res.push({ type: 'good', text: `👍 완벽한 지출 방어 중! 스마트한 소비 생활입니다.` });
+                return res;
+            }, [stats]);
+
+            const handleInitialSetup = async (e) => {
+                e.preventDefault();
+                const data = { name: e.target.username.value, phone: e.target.phone.value };
+                if (window.fb && user) {
+                    const { db, appId, doc, setDoc } = window.fb;
+                    await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}`, 'settings', 'profile'), data);
+                }
+                setUserInfo(data);
+                setSavedPassword(e.target.password.value);
+                setIsAuthenticated(true);
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (String(passwordInput) === String(savedPassword)) setIsAuthenticated(true);
+                else { alert('비밀번호가 틀렸습니다.'); setPasswordInput(''); }
+            };
+
+            const handleResetPassword = async (e) => {
+                e.preventDefault();
+                if (e.target.username.value === userInfo?.name && e.target.phone.value === userInfo?.phone) {
+                    setSavedPassword('0000');
+                    setPasswordInput(''); 
+                    setShowResetModal(false);
+                    alert("본인 확인 완료! 비밀번호가 초기 비밀번호 '0000'으로 재설정되었습니다.");
+                } else alert("입력하신 이름이나 연락처가 가입된 정보와 일치하지 않습니다.");
+            };
+
+            const handleToggleSelect = (id, list, setList) => {
+                if (list.includes(id)) setList(list.filter(i => i !== id)); else setList([...list, id]);
+            };
+
+            const executeBulkDelete = (type, list, clearListFn, deleteFn) => {
+                if(confirm(`선택하신 ${list.length}개의 항목을 삭제하시겠습니까?`)) {
+                    deleteFn(list).then(() => clearListFn([]));
+                }
+            };
+
+            const handleAddTransaction = async (e) => {
+                e.preventDefault();
+                if(!inputAmount) return alert('금액을 입력하세요.');
+                if (inputType === 'payment') {
+                    if(!inputInstitution) return alert('카드를 선택하세요.');
+                    await addPayment({ id: Date.now(), date: inputDate, amount: Number(inputAmount), cardName: inputInstitution, description: inputDesc || `${inputInstitution} 대금 납부`, type: usageType });
+                } else {
+                    if(!inputDesc || !inputInstitution) return alert('내용과 결제수단을 입력하세요.');
+                    await addTx({ id: Date.now(), date: inputDate, amount: Number(inputAmount), category: inputCategory, description: inputDesc, institution: inputInstitution, isIncome: inputType === 'income', type: usageType, isPerformanceEligible });
+                }
+                setInputAmount(''); setInputDesc(''); setActiveTab('home');
+            };
+
+            const handleSaveEdit = (e) => { e.preventDefault(); updateTx(editFormData); alert('수정 완료!'); setEditFormData(null); };
+            const handleAddSubSubmit = (e) => { e.preventDefault(); const f=new FormData(e.target); addSub({ id: Date.now(), title: f.get('title'), amount: Number(f.get('amount')), day: Number(f.get('day')), category: f.get('category'), type: usageType, institution: f.get('institution') }); setShowAddSubModal(false); };
+            const handleSaveSubEdit = (e) => { e.preventDefault(); updateSub(editSubFormData); setEditSubFormData(null); };
+            const handleAddInstSubmit = (e) => { e.preventDefault(); const f=new FormData(e.target); addInst({ id: Date.now(), title: f.get('title'), totalAmount: Number(f.get('totalAmount')), totalMonths: Number(f.get('totalMonths')), paidMonths: Number(f.get('paidMonths')), day: Number(f.get('day')), type: usageType, institution: f.get('institution') }); setShowAddInstModal(false); };
+            const handleSaveInstEdit = (e) => { e.preventDefault(); updateInst(editInstFormData); setEditInstFormData(null); };
+            const handleAddCard = (e) => { e.preventDefault(); if(!newCardName || !newCardDay) return; addCard({ id: Date.now(), name: newCardName, paymentDay: Number(newCardDay), targetAmount: Number(newCardTarget)||0, type: usageType }); setNewCardName(''); setNewCardDay(''); setNewCardTarget(''); };
+            const handleSaveCardEdit = (e) => { e.preventDefault(); updateCard(editCardFormData); setEditCardFormData(null); };
+            
+            const handleChangePassword = (e) => {
+                e.preventDefault();
+                if (String(currentPasswordInput) !== String(savedPassword)) return alert('현재 비밀번호가 일치하지 않습니다.');
+                if (newPasswordInput.length !== 4) return alert('새 비밀번호는 4자리 숫자로 입력해주세요.');
+                setSavedPassword(newPasswordInput); 
+                alert('비밀번호가 성공적으로 변경되었습니다!');
+                setCurrentPasswordInput(''); 
+                setNewPasswordInput('');
+            };
+
+            // --- 🖼️ 렌더링 ---
+            if (!authReady) {
+                return (
+                    <div className="h-screen flex items-center justify-center bg-indigo-50">
+                        <div className="flex flex-col items-center font-black text-indigo-600">
+                            <Icon name="loader-2" className="animate-spin mb-4" size={40} />
+                            클라우드 서버 연동 중...
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!userInfo) return (
+                <div className="min-h-screen flex items-center justify-center p-4 bg-gray-100">
+                    <div className="w-full max-w-sm bg-white p-8 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 border border-gray-100">
+                        <div className="w-20 h-20 gradient-primary rounded-3xl flex items-center justify-center mx-auto mb-6 text-white shadow-lg"><Icon name="user-plus" size={32} /></div>
+                        <h1 className="text-2xl font-black mb-2 text-gray-900">환영합니다!</h1>
+                        <p className="text-xs text-gray-500 mb-8 font-medium leading-relaxed">나만의 안전한 클라우드 가계부를 위해<br/>최초 정보를 등록해주세요.</p>
+                        <form onSubmit={handleInitialSetup} className="space-y-4">
+                            <input name="username" placeholder="이름" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all font-bold outline-none" />
+                            <input name="phone" placeholder="연락처 (숫자만)" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all font-bold outline-none" />
+                            <input name="password" type="password" placeholder="앱 비밀번호 4자리 설정" maxLength={4} required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all text-center font-black tracking-widest outline-none text-lg text-indigo-600" />
+                            <button type="submit" className="w-full py-4 mt-4 gradient-primary text-white rounded-2xl font-black shadow-lg shadow-indigo-200 hover-scale text-lg tracking-tight">가계부 시작하기</button>
+                        </form>
+                    </div>
+                </div>
+            );
+
+            if (!isAuthenticated) return (
+                <div className="min-h-screen flex items-center justify-center p-4 relative bg-gray-100">
+                    {showResetModal && (
+                        <div className="absolute inset-0 z-[100] bg-gray-900/60 flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
+                            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm shadow-2xl animate-in zoom-in-95">
+                                <h2 className="font-black text-2xl mb-2 text-gray-900 tracking-tight">비밀번호 찾기</h2>
+                                <p className="text-xs text-gray-500 mb-8 font-medium leading-relaxed">등록하신 이름과 연락처를 입력하시면<br/>비밀번호가 <span className="font-black text-indigo-600">'0000'</span>으로 초기화됩니다.</p>
+                                <form onSubmit={handleResetPassword} className="space-y-4">
+                                    <input name="username" placeholder="등록된 이름" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent font-bold focus:border-indigo-400 outline-none transition-colors" />
+                                    <input name="phone" placeholder="등록된 연락처" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent font-bold focus:border-indigo-400 outline-none transition-colors" />
+                                    <button type="submit" className="w-full py-4 gradient-primary text-white rounded-2xl font-black shadow-lg shadow-indigo-200 mt-4 hover-scale">초기화 진행</button>
+                                </form>
+                                <button onClick={()=>setShowResetModal(false)} className="w-full mt-6 text-sm text-gray-400 font-bold hover:text-gray-600 transition-colors">취소</button>
+                            </div>
+                        </div>
+                    )}
+                    <div className="w-full max-w-sm bg-white p-10 rounded-[3rem] shadow-2xl text-center border border-gray-100 animate-in slide-in-from-bottom-4">
+                        <div className="w-24 h-24 gradient-primary rounded-[2rem] flex items-center justify-center mx-auto mb-6 text-white shadow-xl shadow-indigo-200/50 rotate-3"><Icon name="lock" size={40} /></div>
+                        <h1 className="text-4xl font-black mb-1 gradient-text tracking-tighter">BillCheck</h1>
+                        <p className="text-sm font-bold text-gray-400 mb-10">{userInfo.name} 님 환영합니다!</p>
+                        <form onSubmit={handleLogin}>
+                            <input type="password" value={passwordInput} onChange={(e)=>setPasswordInput(e.target.value)} placeholder="••••" className="w-full p-5 text-center text-5xl tracking-[1rem] bg-gray-50 rounded-3xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all mb-8 font-black outline-none text-indigo-900" maxLength={4} required autoFocus />
+                            <button type="submit" className="w-full py-4 gradient-primary text-white rounded-2xl font-black text-xl shadow-xl shadow-indigo-200 hover-scale tracking-tight">잠금 해제</button>
+                        </form>
+                        <button onClick={()=>setShowResetModal(true)} className="mt-8 text-xs font-bold text-gray-400 hover:text-indigo-500 transition-colors underline underline-offset-4 decoration-gray-200 hover:decoration-indigo-300">비밀번호를 잊으셨나요?</button>
+                    </div>
+                </div>
+            );
+
+            const renderCalendarWidget = () => {
+                const year = calendarDate.getFullYear();
+                const month = calendarDate.getMonth();
+                const firstDay = new Date(year, month, 1).getDay();
+                const lastDate = new Date(year, month + 1, 0).getDate();
+                const days = [...Array(firstDay).fill(null), ...Array.from({length: lastDate}, (_,i)=>i+1)];
+
+                return (
+                    <div className="bg-white p-6 rounded-[2rem] shadow-sm animate-in slide-in-from-top-4 border border-gray-50">
+                        <div className="flex justify-between items-center mb-6 font-black text-gray-800">
+                            <button onClick={()=>setCalendarDate(new Date(year, month-1, 1))} className="p-2.5 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors"><Icon name="chevron-left" size={18}/></button>
+                            <span className="text-base tracking-tight">{year}년 {month+1}월</span>
+                            <button onClick={()=>setCalendarDate(new Date(year, month+1, 1))} className="p-2.5 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors"><Icon name="chevron-right" size={18}/></button>
+                        </div>
+                        <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-black text-gray-300 mb-4 uppercase tracking-widest">
+                            <div className="text-rose-400">Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div className="text-sky-400">Sat</div>
+                        </div>
+                        <div className="grid grid-cols-7 gap-2">
+                            {days.map((d, i) => {
+                                if (!d) return <div key={`empty-${i}`} />;
+                                const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                                const isSelected = selectedDateFilter === dateStr;
+                                const isToday = dateStr === new Date().toISOString().split('T')[0];
+                                const daySum = stats.filteredTx.filter(t=>t.date === dateStr).reduce((acc, t)=>{ if(t.isIncome) acc.in+=Number(t.amount||0); else acc.out+=Number(t.amount||0); return acc; }, {in:0, out:0});
+                                
+                                return (
+                                    <div key={i} onClick={()=>setSelectedDateFilter(isSelected?null:dateStr)} className={`py-2 rounded-[1rem] cursor-pointer transition-all ${isSelected?'gradient-primary text-white shadow-lg shadow-indigo-200 ring-4 ring-indigo-50 transform scale-105':'hover:bg-gray-50'}`}>
+                                        <div className={`text-sm font-black mx-auto flex items-center justify-center ${isToday && !isSelected ? 'text-indigo-600 bg-indigo-50 w-7 h-7 rounded-full' : ''}`}>{d}</div>
+                                        <div className="h-4 flex items-end justify-center space-x-1 mt-1">
+                                            {daySum.in > 0 && <div className={`w-1.5 h-1.5 rounded-full ${isSelected?'bg-white':'bg-blue-400'}`} />}
+                                            {daySum.out > 0 && <div className={`w-1.5 h-1.5 rounded-full ${isSelected?'bg-red-300':'bg-rose-400'}`} />}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 flex items-center justify-center p-0 sm:p-4 selection:bg-indigo-100 font-sans">
+                    <div className="w-full max-w-md h-[100dvh] sm:h-[850px] bg-[#f8fafc] sm:rounded-[3rem] shadow-2xl relative flex flex-col border-0 sm:border-8 border-gray-900">
+                        
+                        {/* 헤더 */}
+                        <div className="glass-panel px-6 pt-14 pb-4 z-10 flex justify-between items-center shrink-0 border-b border-gray-200/50">
+                            <h1 className="text-2xl font-black text-gray-900 flex items-center tracking-tighter">
+                                <span className="w-8 h-8 gradient-primary rounded-xl flex items-center justify-center text-white mr-2 shadow-sm"><Icon name="wallet" size={18} /></span>
+                                BillCheck
+                            </h1>
+                            <div className="flex bg-gray-200/50 p-1.5 rounded-xl">
+                                <button onClick={()=>setUsageType('가정용')} className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all ${usageType==='가정용'?'tab-active':'text-gray-500 hover:text-gray-700'}`}>가정</button>
+                                <button onClick={()=>setUsageType('사업용')} className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all ${usageType==='사업용'?'tab-active':'text-gray-500 hover:text-gray-700'}`}>사업</button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-x-hidden overflow-y-auto p-5 pb-32">
+                            {activeTab === 'home' && (
+                                <div className="space-y-6 animate-in fade-in duration-300">
+                                    <div className="bg-white p-5 rounded-[2rem] shadow-sm relative border border-gray-100">
+                                        <div className="flex items-center mb-4 font-black text-gray-800 text-sm"><Icon name="bot" size={20} className="mr-2 text-indigo-500"/>AI 스마트 리포트</div>
+                                        <div className="space-y-3">
+                                            {advices.map((a,i)=>(<div key={i} className={`text-xs p-4 rounded-2xl font-bold leading-relaxed shadow-sm ${a.type==='warning'?'bg-orange-50 text-orange-800':a.type==='success'?'gradient-success text-white':'bg-indigo-50 text-indigo-800'}`}>{a.text}</div>))}
+                                        </div>
+                                    </div>
+
+                                    <button onClick={()=>setIsCalendarOpen(!isCalendarOpen)} className="w-full flex justify-between items-center bg-white p-5 rounded-[1.5rem] shadow-sm font-black text-gray-700 text-sm hover-scale border border-gray-100">
+                                        <span className="flex items-center"><Icon name="calendar" size={20} className="mr-3 text-indigo-500"/> 내역 캘린더 보기</span> 
+                                        <div className={`p-1 bg-gray-50 rounded-full transition-transform duration-300 ${isCalendarOpen?'rotate-180':''}`}><Icon name="chevron-down" size={18} className="text-gray-500"/></div>
+                                    </button>
+                                    
+                                    {isCalendarOpen && renderCalendarWidget()}
+
+                                    <div className="gradient-card rounded-[2.5rem] p-8 text-white relative">
+                                        <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
+                                        <p className="text-indigo-200 text-xs mb-2 font-bold flex items-center">이번 달 사용 가능 예산 <Icon name="chevron-right" size={14} className="ml-1 opacity-50"/></p>
+                                        <h2 className="text-4xl font-black mb-8 tracking-tighter">{formatKRW(stats.balance)}</h2>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20"><p className="text-[10px] text-indigo-200 font-black mb-1 uppercase tracking-widest">INCOME</p><p className="font-black text-white text-base">{formatKRW(stats.income)}</p></div>
+                                            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20"><p className="text-[10px] text-indigo-200 font-black mb-1 uppercase tracking-widest">EXPENSE</p><p className="font-black text-white text-base">{formatKRW(stats.expense)}</p></div>
+                                        </div>
+                                    </div>
+
+                                    {stats.cardPerf.some(c=>c.targetAmount>0) && (
+                                        <div className="bg-white p-6 rounded-[2.5rem] shadow-sm space-y-6 border border-gray-100">
+                                            <h3 className="text-sm font-black text-gray-900 flex items-center"><Icon name="credit-card" className="mr-2 text-indigo-500" size={20}/>카드 혜택 구간 알림</h3>
+                                            {stats.cardPerf.filter(c=>c.targetAmount>0).map(c=>(
+                                                <div key={c.id} className="bg-gray-50 p-4 rounded-2xl">
+                                                    <div className="flex justify-between text-xs mb-3 font-black text-gray-700">
+                                                        <span>{c.name}</span>
+                                                        <span className={c.spent>=c.targetAmount?'text-emerald-500':'text-indigo-600'}>{c.spent>=c.targetAmount?'달성 완료!':`${formatKRW(c.targetAmount-c.spent)} 남음`}</span>
+                                                    </div>
+                                                    <div className="h-3 w-full bg-white rounded-full overflow-hidden shadow-inner border border-gray-100">
+                                                        <div className={`h-full transition-all duration-1000 rounded-full ${c.spent>=c.targetAmount?'gradient-success':'gradient-primary'}`} style={{width:`${Math.min((c.spent/c.targetAmount)*100,100)}%`}}></div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100">
+                                            <h3 className="text-sm font-black text-gray-900 flex items-center"><Icon name="list" size={18} className="mr-2 text-indigo-500"/>{selectedDateFilter?`${selectedDateFilter.substring(5)} 내역`:'최근 거래 내역'}</h3>
+                                            {selectedTxs.length > 0 && <button onClick={()=>executeBulkDelete('txs', selectedTxs, setSelectedTxs, bulkDeleteTxs)} className="text-[10px] bg-rose-50 text-rose-600 px-3 py-1.5 rounded-lg font-black hover-scale">선택 삭제 ({selectedTxs.length})</button>}
+                                        </div>
+                                        
+                                        {(selectedDateFilter ? stats.filteredTx.filter(t=>t.date===selectedDateFilter) : stats.filteredTx).sort((a,b)=>b.id-a.id).slice(0, 30).map(tx=>(
+                                            <div key={tx.id} className="bg-white p-4 rounded-[2rem] shadow-sm flex items-center justify-between hover-scale group border border-gray-50">
+                                                <input type="checkbox" checked={selectedTxs.includes(tx.id)} onChange={()=>handleToggleSelect(tx.id, selectedTxs, setSelectedTxs)} className="custom-checkbox mr-3" />
+                                                <div className="flex-1 overflow-hidden pr-2">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <p className="font-extrabold text-sm text-gray-900 truncate">{tx.description}</p>
+                                                        {tx.isPerformanceEligible===false&&<span className="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-md font-bold shrink-0">실적제외</span>}
+                                                    </div>
+                                                    <p className="text-[10px] text-gray-400 font-bold truncate">{tx.date} · {tx.institution}</p>
+                                                </div>
+                                                <div className="text-right shrink-0">
+                                                    <p className={`font-black text-base tracking-tight ${tx.isIncome?'text-blue-600':'text-gray-900'}`}>{tx.isIncome?'+':'-'}{formatKRW(tx.amount)}</p>
+                                                    <button onClick={()=>setEditFormData(tx)} className="text-gray-300 hover:text-indigo-600 mt-1 transition-colors p-1"><Icon name="pencil" size={14}/></button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'input' && (
+                                <div className="animate-in slide-in-from-bottom-4 duration-300">
+                                    <h2 className="text-3xl font-black mb-8 text-gray-900 tracking-tight pl-2">장부 기록</h2>
+                                    <form onSubmit={handleAddTransaction} className="space-y-6 bg-white p-7 rounded-[3rem] shadow-xl border border-gray-100">
+                                        <div className="flex bg-gray-50 p-1.5 rounded-2xl border border-gray-200/50">
+                                            {['expense','income','payment'].map(t=>(
+                                                <button key={t} type="button" onClick={()=>setInputType(t)} className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${inputType===t?'bg-white text-indigo-600 shadow-sm border border-gray-100':'text-gray-400 hover:text-gray-600'}`}>{t==='expense'?'지출':t==='income'?'수입':'카드대금'}</button>
+                                            ))}
+                                        </div>
+                                        
+                                        <div><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Date</label><input type="date" value={inputDate} onChange={(e)=>setInputDate(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required /></div>
+                                        
+                                        <div>
+                                            <label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Amount</label>
+                                            <div className="relative">
+                                                <input type="number" value={inputAmount} onChange={(e)=>setInputAmount(e.target.value)} placeholder="0" className="w-full text-right text-4xl font-black p-4 border-b-4 border-gray-200 focus:border-indigo-500 focus:outline-none bg-transparent transition-colors text-gray-900" required />
+                                                <span className="absolute right-0 top-6 text-gray-400 font-black">원</span>
+                                            </div>
+                                        </div>
+                                        
+                                        {inputType === 'payment' ? (
+                                            <div><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Card</label><select value={inputInstitution} onChange={(e)=>setInputInstitution(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required><option value="">납부 카드를 선택하세요</option>{cardAccounts.filter(c=>c.type===usageType).map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+                                        ) : (
+                                            <div className="flex flex-col sm:flex-row gap-4">
+                                                <div className="w-full"><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Method</label>
+                                                    <select value={inputInstitution} onChange={(e)=>setInputInstitution(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required>
+                                                        <option value="">결제수단 선택</option>
+                                                        {cardAccounts.filter(c=>c.type===usageType).map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+                                                        <option value="현금">현금</option><option value="은행이체">은행이체</option>
+                                                    </select>
+                                                </div>
+                                                <div className="w-full"><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Category</label>
+                                                    <select value={inputCategory} onChange={(e)=>setInputCategory(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800">
+                                                        {inputType==='expense' ? <><option value="식비">식비</option><option value="쇼핑">쇼핑</option><option value="교통">교통</option><option value="주거">주거/통신</option><option value="관리비">관리비/세금</option></> : <><option value="급여">급여</option><option value="매출">매출</option><option value="용돈">용돈</option></>}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {inputType==='expense'&&cardAccounts.some(c=>c.name===inputInstitution)&&(
+                                            <label className="flex items-center gap-4 p-5 bg-indigo-50 rounded-2xl text-xs font-black text-indigo-900 cursor-pointer transition-all active:bg-indigo-100 border border-indigo-100/50 hover-scale">
+                                                <input type="checkbox" checked={isPerformanceEligible} onChange={(e)=>setIsPerformanceEligible(e.target.checked)} className="custom-checkbox border-indigo-300"/> 
+                                                카드 혜택 실적 인정 항목
+                                            </label>
+                                        )}
+                                        <div><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Memo</label><input type="text" value={inputDesc} onChange={(e)=>setInputDesc(e.target.value)} placeholder="예: 점심 식사" className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required /></div>
+                                        <button type="submit" className="w-full py-5 gradient-primary text-white rounded-[2rem] font-black text-xl shadow-xl shadow-indigo-200 hover-scale mt-4">기록 저장하기</button>
+                                    </form>
+                                </div>
+                            )}
+
+                            {activeTab === 'stats' && (
+                                <div className="space-y-6 animate-in slide-in-from-left-4 duration-300">
+                                    <h2 className="text-3xl font-black mb-8 text-gray-900 tracking-tight pl-2">{calendarDate.getFullYear()}년 {calendarDate.getMonth() + 1}월 통계</h2>
+                                    {stats.totalExpense === 0 ? <div className="bg-white p-10 rounded-[3rem] text-center shadow-sm text-gray-400 font-bold border border-gray-100">지출 내역이 없습니다.</div> : (
+                                        <div className="bg-white p-8 rounded-[3rem] shadow-xl border border-gray-100">
+                                            <h3 className="text-sm font-black text-center mb-8 text-gray-800">카테고리별 지출 비율</h3>
+                                            <div className="flex flex-col items-center">
+                                                <div className="relative w-56 h-56 rounded-full flex items-center justify-center shadow-inner mb-2" style={{ background: `conic-gradient(${stats.conicStops})` }}>
+                                                    <div className="w-40 h-40 bg-white rounded-full flex flex-col items-center justify-center shadow-lg">
+                                                        <span className="text-[11px] font-black text-gray-400 mb-1 tracking-widest uppercase">Total</span>
+                                                        <span className="text-lg font-black text-gray-900">{formatKRW(stats.totalExpense)}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="w-full mt-10 space-y-4">
+                                                    {stats.catStats.map(item => (
+                                                        <div key={item.name} className="flex justify-between text-sm items-center bg-gray-50 p-4 rounded-2xl">
+                                                            <div className="flex items-center"><span className="w-4 h-4 rounded-full mr-3 shadow-sm border-2 border-white" style={{ backgroundColor: item.color }}></span><span className="font-black text-gray-800">{item.name}</span></div>
+                                                            <div className="flex items-center gap-4"><span className="font-black text-gray-900">{formatKRW(item.value)}</span><span className="text-xs font-black text-gray-400 w-12 text-right">{Math.round((item.value / stats.totalExpense) * 100)}%</span></div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'recurring' && (
+                                <div className="space-y-8 animate-in slide-in-from-right-4 duration-300">
+                                    <h2 className="text-3xl font-black mb-8 text-gray-900 tracking-tight pl-2">이체 및 할부</h2>
+                                    
+                                    <div className="bg-white p-7 rounded-[3rem] border border-gray-100 shadow-sm">
+                                        <div className="flex justify-between mb-6 items-center">
+                                            <h3 className="font-black text-gray-900 flex items-center"><span className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center mr-3"><Icon name="pie-chart" size={16}/></span>할부 및 대출 잔액</h3>
+                                            <div className="flex gap-2">
+                                                {selectedInsts.length > 0 && <button onClick={()=>executeBulkDelete('할부', selectedInsts, setSelectedInsts, bulkDeleteInsts)} className="text-xs bg-rose-50 text-rose-600 px-3 py-2 rounded-xl font-black hover-scale">삭제({selectedInsts.length})</button>}
+                                                <button onClick={()=>setShowAddInstModal(true)} className="text-xs font-black text-white gradient-primary px-3 py-2 rounded-xl hover-scale flex items-center shadow-md"><Icon name="plus" size={14} className="mr-1"/> 추가</button>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-4">
+                                            {stats.filteredInsts.length === 0 ? <p className="text-center text-xs text-gray-400 font-bold py-6 bg-gray-50 rounded-2xl">등록된 항목이 없습니다.</p> : stats.filteredInsts.map(inst=>(
+                                                <div key={inst.id} className="bg-gray-50 p-5 rounded-3xl flex items-start gap-4 hover:bg-white hover:shadow-sm border border-transparent hover:border-gray-100 transition-all">
+                                                    <input type="checkbox" checked={selectedInsts.includes(inst.id)} onChange={()=>handleToggleSelect(inst.id, selectedInsts, setSelectedInsts)} className="custom-checkbox mt-1" />
+                                                    <div className="flex-1 w-full overflow-hidden">
+                                                        <div className="flex justify-between mb-3 font-black text-gray-800 text-sm"><span>{inst.title}</span><span className="text-indigo-600">{formatKRW((inst.totalAmount / inst.totalMonths) * (inst.totalMonths - inst.paidMonths))}</span></div>
+                                                        <div className="h-3 w-full bg-white rounded-full overflow-hidden shadow-inner border border-gray-100"><div className="h-full gradient-primary transition-all duration-1000" style={{width:`${(inst.paidMonths/inst.totalMonths)*100}%`}}></div></div>
+                                                        <div className="flex justify-between text-[11px] text-gray-500 mt-3 font-bold"><span>{inst.paidMonths}/{inst.totalMonths}회 납부 (매월 {inst.day}일)</span><div className="flex gap-3"><button onClick={()=>setEditInstFormData(inst)} className="hover:text-indigo-600 transition-colors p-1"><Icon name="pencil" size={14}/></button></div></div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white p-7 rounded-[3rem] border border-gray-100 shadow-sm">
+                                        <div className="flex justify-between mb-6 items-center">
+                                            <h3 className="font-black text-gray-900 flex items-center"><span className="w-8 h-8 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center mr-3"><Icon name="repeat" size={16}/></span>정기 결제 구독</h3>
+                                            <div className="flex gap-2">
+                                                {selectedSubs.length > 0 && <button onClick={()=>executeBulkDelete('구독', selectedSubs, setSelectedSubs, bulkDeleteSubs)} className="text-xs bg-rose-50 text-rose-600 px-3 py-2 rounded-xl font-black hover-scale">삭제({selectedSubs.length})</button>}
+                                                <button onClick={()=>setShowAddSubModal(true)} className="text-xs font-black text-white bg-teal-500 px-3 py-2 rounded-xl hover-scale flex items-center shadow-md"><Icon name="plus" size={14} className="mr-1"/> 추가</button>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-4">
+                                            {stats.upcomingSubs.length === 0 ? <p className="text-center text-xs text-gray-400 font-bold py-6 bg-gray-50 rounded-2xl">등록된 항목이 없습니다.</p> : stats.upcomingSubs.map(sub=>(
+                                                <div key={sub.id} className="flex justify-between items-center text-sm gap-4 p-5 bg-gray-50 rounded-[2rem] border border-transparent hover:border-teal-100 transition-colors hover:bg-white hover:shadow-sm group">
+                                                    <input type="checkbox" checked={selectedSubs.includes(sub.id)} onChange={()=>handleToggleSelect(sub.id, selectedSubs, setSelectedSubs)} className="custom-checkbox border-teal-200 checked:bg-teal-500 checked:border-teal-500" />
+                                                    <div className="flex-1 overflow-hidden pr-2"><p className="font-black text-gray-800 mb-1 truncate">{sub.title}</p><p className="text-[10px] font-semibold text-gray-400">매월 {sub.day}일 결제 · {sub.institution}</p></div>
+                                                    <div className="text-right shrink-0"><p className="font-black text-teal-600 text-base">{formatKRW(sub.amount)}</p><button onClick={()=>setEditSubFormData(sub)} className="mt-2 text-[10px] font-bold text-gray-400 hover:text-teal-600 p-1"><Icon name="pencil" size={14}/></button></div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'assets' && (
+                                <div className="space-y-8 animate-in slide-in-from-right-4 duration-300">
+                                    <h2 className="text-3xl font-black text-gray-900 mb-8 tracking-tight pl-2">설정 및 관리</h2>
+
+                                    <div className="bg-white p-7 rounded-[2.5rem] shadow-sm border border-gray-100">
+                                        <div className="flex justify-between mb-6 items-center">
+                                            <h3 className="font-black text-gray-900 flex items-center text-sm"><span className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center mr-3"><Icon name="credit-card" size={16}/></span>결제 카드 관리</h3>
+                                            {selectedCards.length > 0 && <button onClick={()=>executeBulkDelete('카드', selectedCards, setSelectedCards, bulkDeleteCards)} className="text-xs bg-rose-50 text-rose-600 px-3 py-2 rounded-xl font-black hover-scale">삭제({selectedCards.length})</button>}
+                                        </div>
+                                        <form onSubmit={handleAddCard} className="mb-6 bg-gray-50 p-5 rounded-[2rem] border border-gray-100 flex flex-col gap-3">
+                                            <div className="flex flex-col sm:flex-row gap-3">
+                                                <input value={newCardName} onChange={(e)=>setNewCardName(e.target.value)} placeholder="카드명 입력" className="w-full p-4 bg-white rounded-xl text-xs font-bold border border-transparent focus:border-indigo-400 outline-none shadow-sm" required/>
+                                                <input value={newCardDay} onChange={(e)=>setNewCardDay(e.target.value)} type="number" placeholder="결제일" className="w-full sm:w-1/3 p-4 bg-white rounded-xl text-xs font-bold border border-transparent focus:border-indigo-400 outline-none shadow-sm" required/>
+                                            </div>
+                                            <div className="flex flex-col sm:flex-row gap-3">
+                                                <input value={newCardTarget} onChange={(e)=>setNewCardTarget(e.target.value)} type="number" placeholder="월 실적 목표 (없으면 비워둠)" className="w-full p-4 bg-white rounded-xl text-xs font-bold border border-transparent focus:border-indigo-400 outline-none shadow-sm" />
+                                                <button type="submit" className="w-full sm:w-1/3 bg-gray-900 text-white p-4 rounded-xl text-xs font-black shadow-md hover:bg-gray-800 transition-colors active:scale-95">카드 추가</button>
+                                            </div>
+                                        </form>
+                                        <div className="space-y-3">
+                                            {cardAccounts.filter(c=>c.type===usageType).length === 0 ? <p className="text-center text-xs text-gray-400 font-bold py-4">등록된 카드가 없습니다.</p> : 
+                                            cardAccounts.filter(c=>c.type===usageType).map(c=>(
+                                                <div key={c.id} className="flex items-center gap-4 p-5 bg-white border border-gray-100 rounded-[2rem] hover:border-indigo-300 shadow-sm transition-all group">
+                                                    <input type="checkbox" checked={selectedCards.includes(c.id)} onChange={()=>handleToggleSelect(c.id, selectedCards, setSelectedCards)} className="custom-checkbox" />
+                                                    <div className="flex-1 font-black text-sm text-gray-800 overflow-hidden pr-2 truncate">{c.name} <div className="text-[10px] text-gray-400 mt-1 font-bold">매월 {c.paymentDay}일 결제 · 목표 {formatKRW(c.targetAmount)}</div></div>
+                                                    <button onClick={()=>setEditCardFormData(c)} className="p-2 bg-gray-50 rounded-xl text-gray-400 hover:text-indigo-600"><Icon name="pencil" size={14}/></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white p-7 rounded-[3rem] shadow-sm border border-gray-100">
+                                        <div className="flex justify-between mb-6 items-center">
+                                            <h3 className="font-black text-sm flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-teal-50 text-teal-500 flex items-center justify-center mr-3"><Icon name="receipt" size={16}/></span>대금 납부 역사</h3>
+                                            {selectedPayments.length > 0 && <button onClick={()=>executeBulkDelete('납부기록', selectedPayments, setSelectedPayments, bulkDeletePayments)} className="text-xs bg-rose-50 text-rose-600 px-3 py-2 rounded-xl font-black hover-scale">삭제({selectedPayments.length})</button>}
+                                        </div>
+                                        <div className="space-y-3">
+                                            {cardPayments.filter(p=>p.type===usageType).length === 0 ? <p className="text-center text-xs text-gray-400 font-bold py-6 bg-gray-50 rounded-2xl">납부 기록이 없습니다.</p> : 
+                                            cardPayments.filter(p=>p.type===usageType).sort((a,b)=>Number(b.id)-Number(a.id)).slice(0, 10).map(p=>(
+                                                <div key={p.id} className="flex items-center justify-between bg-gray-50 p-4 rounded-[1.5rem] border border-transparent hover:border-gray-200 transition-colors">
+                                                    <input type="checkbox" checked={selectedPayments.includes(p.id)} onChange={()=>handleToggleSelect(p.id, selectedPayments, setSelectedPayments)} className="custom-checkbox border-teal-200 checked:bg-teal-500 checked:border-teal-500 mr-4" />
+                                                    <div className="flex-1 overflow-hidden pr-2"><p className="font-black text-gray-800 mb-1 truncate">{p.cardName}</p><p className="text-[10px] text-gray-400 font-bold">{p.date}</p></div>
+                                                    <p className="font-black text-teal-600">{formatKRW(p.amount)}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="bg-white p-7 rounded-[3rem] shadow-sm border border-gray-100">
+                                        <h3 className="font-black text-sm mb-6 flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center mr-3"><Icon name="lock" size={16}/></span>앱 잠금 비밀번호 변경</h3>
+                                        <form onSubmit={handleChangePassword} className="space-y-4 bg-gray-50 p-5 rounded-[2rem]">
+                                            <input name="curpwd" type="password" value={currentPasswordInput} onChange={(e)=>setCurrentPasswordInput(e.target.value)} placeholder="현재 비밀번호 입력" className="w-full p-4 bg-white rounded-xl text-sm border-0 font-black tracking-widest text-center focus:ring-2 focus:ring-rose-200 outline-none shadow-sm" required />
+                                            <input name="newpwd" type="password" value={newPasswordInput} onChange={(e)=>setNewPasswordInput(e.target.value)} placeholder="새 비밀번호 4자리" maxLength={4} className="w-full p-4 bg-white rounded-xl text-sm border-0 font-black tracking-widest text-center focus:ring-2 focus:ring-rose-200 outline-none shadow-sm" required />
+                                            <button type="submit" className="w-full py-4 bg-gray-900 text-white rounded-xl font-black shadow-md hover:bg-gray-800 active:scale-95 transition-all">비밀번호 변경 완료</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 모달 팝업들 */}
+                        {editFormData && (
+                            <div className="absolute inset-0 z-[200] bg-gray-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-full">
+                                    <div className="p-6 bg-gray-50 flex justify-between items-center"><h2 className="text-xl font-black text-gray-900">내역 수정</h2><button onClick={()=>setEditFormData(null)} className="p-2 bg-white rounded-full shadow-sm text-gray-500 hover:bg-gray-200"><Icon name="x" size={18}/></button></div>
+                                    <form onSubmit={handleSaveEdit} className="p-6 space-y-5 overflow-y-auto flex-1">
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">수입/지출</label><select value={editFormData.isIncome} onChange={(e)=>setEditFormData({...editFormData, isIncome:e.target.value==='true'})} className="w-full p-4 bg-gray-50 rounded-2xl font-bold border border-gray-200 focus:border-indigo-500 outline-none"><option value="false">지출</option><option value="true">수입</option></select></div>
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">날짜</label><input type="date" value={editFormData.date} onChange={(e)=>setEditFormData({...editFormData, date:e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-bold border border-gray-200 focus:border-indigo-500 outline-none" required/></div>
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">금액</label><input type="number" value={editFormData.amount} onChange={(e)=>setEditFormData({...editFormData, amount:Number(e.target.value)})} className="w-full p-4 bg-gray-50 rounded-2xl font-black border border-gray-200 focus:border-indigo-500 outline-none text-right" required/></div>
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">메모</label><input type="text" value={editFormData.description} onChange={(e)=>setEditFormData({...editFormData, description:e.target.value})} className="w-full p-4 bg-gray-50 rounded-2xl font-bold border border-gray-200 focus:border-indigo-500 outline-none" required/></div>
+                                        <button type="submit" className="w-full py-4 gradient-primary text-white rounded-2xl font-black shadow-lg hover-scale mt-2">수정 완료</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                        {showAddSubModal && (
+                            <div className="absolute inset-0 z-[200] bg-gray-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-full">
+                                    <div className="p-6 bg-teal-50 flex justify-between items-center"><h2 className="text-xl font-black text-teal-900">정기결제 추가</h2><button onClick={()=>setShowAddSubModal(false)} className="p-2 bg-white rounded-full shadow-sm text-gray-500"><Icon name="x" size={18}/></button></div>
+                                    <form onSubmit={handleAddSubSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
+                                        <input name="title" placeholder="항목명 (예: 넷플릭스)" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-teal-500 outline-none" required />
+                                        <input name="amount" type="number" placeholder="금액" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-black focus:border-teal-500 outline-none text-right" required />
+                                        <input name="day" type="number" placeholder="매월 결제일(숫자)" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-teal-500 outline-none" required />
+                                        <input name="institution" placeholder="결제수단" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-teal-500 outline-none" required />
+                                        <input name="category" placeholder="카테고리" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-teal-500 outline-none" required />
+                                        <button type="submit" className="w-full py-4 bg-teal-500 text-white rounded-2xl font-black shadow-lg mt-4 hover:bg-teal-600">등록하기</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                        {showAddInstModal && (
+                            <div className="absolute inset-0 z-[200] bg-gray-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-full">
+                                    <div className="p-6 bg-indigo-50 flex justify-between items-center"><h2 className="text-xl font-black text-indigo-900">할부/대출 추가</h2><button onClick={()=>setShowAddInstModal(false)} className="p-2 bg-white rounded-full shadow-sm text-gray-500"><Icon name="x" size={18}/></button></div>
+                                    <form onSubmit={handleAddInstSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
+                                        <input name="title" placeholder="항목명 (예: 스마트폰 할부)" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" required />
+                                        <input name="totalAmount" type="number" placeholder="총 원금" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-black focus:border-indigo-500 outline-none text-right" required />
+                                        <div className="flex gap-3"><input name="totalMonths" type="number" placeholder="총 개월" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" required /><input name="paidMonths" type="number" placeholder="납부횟수" defaultValue="0" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" /></div>
+                                        <input name="day" type="number" placeholder="매월 결제일" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" required />
+                                        <input name="institution" placeholder="카드사/은행" className="w-full p-4 bg-gray-50 rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" required />
+                                        <button type="submit" className="w-full py-4 gradient-primary text-white rounded-2xl font-black shadow-lg mt-4 hover-scale">등록하기</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                        {editCardFormData && (
+                            <div className="absolute inset-0 z-[200] bg-gray-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-full">
+                                    <div className="p-6 bg-gray-50 flex justify-between items-center"><h2 className="text-xl font-black text-gray-900">카드 수정</h2><button onClick={()=>setEditCardFormData(null)} className="p-2 bg-white rounded-full shadow-sm text-gray-500"><Icon name="x" size={18}/></button></div>
+                                    <form onSubmit={handleSaveCardEdit} className="p-6 space-y-4 overflow-y-auto flex-1">
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">카드명</label><input type="text" value={editCardFormData.name} onChange={(e)=>setEditCardFormData({...editCardFormData, name:e.target.value})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" required /></div>
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">결제일</label><input type="number" value={editCardFormData.paymentDay} onChange={(e)=>setEditCardFormData({...editCardFormData, paymentDay:parseInt(e.target.value)||1})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" required /></div>
+                                        <div><label className="block text-[11px] font-bold text-gray-400 mb-1 ml-1">목표 실적</label><input type="number" value={editCardFormData.targetAmount} onChange={(e)=>setEditCardFormData({...editCardFormData, targetAmount:parseInt(e.target.value)||0})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" /></div>
+                                        <button type="submit" className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black shadow-lg mt-4 active:scale-95 transition-transform">저장 완료</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                        {editSubFormData && (
+                            <div className="absolute inset-0 z-[200] bg-gray-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-full">
+                                    <div className="p-6 bg-teal-50 flex justify-between items-center"><h2 className="text-xl font-black text-teal-900">정기결제 수정</h2><button onClick={()=>setEditSubFormData(null)} className="p-2 bg-white rounded-full shadow-sm text-gray-500"><Icon name="x" size={18}/></button></div>
+                                    <form onSubmit={handleSaveSubEdit} className="p-6 space-y-4 overflow-y-auto flex-1">
+                                        <input type="text" value={editSubFormData.title} onChange={(e)=>setEditSubFormData({...editSubFormData, title:e.target.value})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-teal-500 outline-none" required />
+                                        <input type="number" value={editSubFormData.amount} onChange={(e)=>setEditSubFormData({...editSubFormData, amount:parseInt(e.target.value)||0})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-black focus:border-teal-500 outline-none text-right" required />
+                                        <input type="number" value={editSubFormData.day} onChange={(e)=>setEditSubFormData({...editSubFormData, day:parseInt(e.target.value)||1})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-teal-500 outline-none" required />
+                                        <button type="submit" className="w-full py-4 bg-teal-500 text-white rounded-2xl font-black shadow-lg mt-4 hover:bg-teal-600">수정 완료</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                        {editInstFormData && (
+                            <div className="absolute inset-0 z-[200] bg-gray-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+                                <div className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-full">
+                                    <div className="p-6 bg-indigo-50 flex justify-between items-center"><h2 className="text-xl font-black text-indigo-900">할부/대출 수정</h2><button onClick={()=>setEditInstFormData(null)} className="p-2 bg-white rounded-full shadow-sm text-gray-500"><Icon name="x" size={18}/></button></div>
+                                    <form onSubmit={handleSaveInstEdit} className="p-6 space-y-4 overflow-y-auto flex-1">
+                                        <input type="text" value={editInstFormData.title} onChange={(e)=>setEditInstFormData({...editInstFormData, title:e.target.value})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" placeholder="항목명" required />
+                                        <input type="number" value={editInstFormData.totalAmount} onChange={(e)=>setEditInstFormData({...editInstFormData, totalAmount:parseInt(e.target.value)||0})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-black focus:border-indigo-500 outline-none text-right" placeholder="총 금액" required />
+                                        <div className="flex gap-3">
+                                            <input type="number" value={editInstFormData.totalMonths} onChange={(e)=>setEditInstFormData({...editInstFormData, totalMonths:parseInt(e.target.value)||1})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" placeholder="총 개월" required />
+                                            <input type="number" value={editInstFormData.paidMonths} onChange={(e)=>setEditInstFormData({...editInstFormData, paidMonths:parseInt(e.target.value)||0})} className="w-full p-4 bg-white rounded-2xl border border-gray-200 font-bold focus:border-indigo-500 outline-none" placeholder="현재 납부 횟" required />
+                                        </div>
+                                        <button type="submit" className="w-full py-4 gradient-primary text-white rounded-2xl font-black shadow-lg mt-4 hover-scale">수정 완료</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 하단 네비게이션 */}
+                        <div className="glass-panel border-t border-gray-200/50 flex justify-around items-center p-2 pb-safe absolute bottom-0 w-full z-50 rounded-t-[2.5rem] shadow-[0_-20px_40px_rgba(0,0,0,0.03)]">
+                            <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center p-3 w-16 transition-all duration-300 ${activeTab==='home'?'text-indigo-600 -translate-y-2':'text-gray-400 hover:text-gray-600'}`}><Icon name="home" size={24} /><span className={`text-[10px] mt-1.5 font-black transition-opacity ${activeTab==='home'?'opacity-100':'opacity-0 h-0'}`}>홈</span></button>
+                            <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center p-3 w-16 transition-all duration-300 ${activeTab==='stats'?'text-indigo-600 -translate-y-2':'text-gray-400 hover:text-gray-600'}`}><Icon name="bar-chart-3" size={24} /><span className={`text-[10px] mt-1.5 font-black transition-opacity ${activeTab==='stats'?'opacity-100':'opacity-0 h-0'}`}>통계</span></button>
+                            <div className="flex flex-col items-center w-16 -mt-10"><button onClick={() => setActiveTab('input')} className={`p-4 rounded-[1.5rem] shadow-2xl transition-all duration-300 transform active:scale-90 border-4 border-white ${activeTab==='input'?'bg-gray-900 text-white rotate-45':'gradient-primary text-white shadow-indigo-200'}`}><Icon name="plus" size={32}/></button></div>
+                            <button onClick={() => setActiveTab('recurring')} className={`flex flex-col items-center p-3 w-16 transition-all duration-300 ${activeTab==='recurring'?'text-indigo-600 -translate-y-2':'text-gray-400 hover:text-gray-600'}`}><Icon name="repeat" size={24} /><span className={`text-[10px] mt-1.5 font-black transition-opacity ${activeTab==='recurring'?'opacity-100':'opacity-0 h-0'}`}>이체/할부</span></button>
+                            <button onClick={() => setActiveTab('assets')} className={`flex flex-col items-center p-3 w-16 transition-all duration-300 ${activeTab==='assets'?'text-indigo-600 -translate-y-2':'text-gray-400 hover:text-gray-600'}`}><Icon name="settings" size={24} /><span className={`text-[10px] mt-1.5 font-black transition-opacity ${activeTab==='assets'?'opacity-100':'opacity-0 h-0'}`}>설정</span></button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
