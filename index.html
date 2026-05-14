@@ -199,6 +199,8 @@
             const [inputDesc, setInputDesc] = useState('');
             const [inputInstitution, setInputInstitution] = useState('');
             const [isPerformanceEligible, setIsPerformanceEligible] = useState(true);
+            const [customCategory, setCustomCategory] = useState('');
+            const [openDates, setOpenDates] = useState({});
             const [newCardName, setNewCardName] = useState('');
             const [newCardDay, setNewCardDay] = useState('');
             const [newCardTarget, setNewCardTarget] = useState('');
@@ -212,6 +214,22 @@
             
             const [currentPasswordInput, setCurrentPasswordInput] = useState('');
             const [newPasswordInput, setNewPasswordInput] = useState('');
+            
+            const [colorT1, setColorT1] = useState(50000);
+            const [colorC1, setColorC1] = useState('#eab308');
+            const [colorT2, setColorT2] = useState(100000);
+            const [colorC2, setColorC2] = useState('#3b82f6');
+            const [colorC3, setColorC3] = useState('#ef4444');
+
+            useEffect(() => {
+                if (userInfo?.colorSettings) {
+                    setColorT1(userInfo.colorSettings.t1);
+                    setColorC1(userInfo.colorSettings.c1);
+                    setColorT2(userInfo.colorSettings.t2);
+                    setColorC2(userInfo.colorSettings.c2);
+                    setColorC3(userInfo.colorSettings.c3);
+                }
+            }, [userInfo]);
             
             const [selectedTxs, setSelectedTxs] = useState([]);
             const [selectedSubs, setSelectedSubs] = useState([]);
@@ -228,25 +246,30 @@
                 const targetInsts = installments.filter(inst => inst.type === usageType);
                 const targetPayments = cardPayments.filter(p => p.type === usageType);
                 
-                const income = targetTx.filter(tx => tx.isIncome).reduce((s, tx) => s + Number(tx.amount || 0), 0);
-                const expense = targetTx.filter(tx => !tx.isIncome).reduce((s, tx) => s + Number(tx.amount || 0), 0);
-                
                 const curYM = calendarDate.toISOString().substring(0, 7);
+                const currMonthTx = targetTx.filter(tx => tx.date.startsWith(curYM));
+                
+                const income = currMonthTx.filter(tx => tx.isIncome).reduce((s, tx) => s + Number(tx.amount || 0), 0);
+                const expense = currMonthTx.filter(tx => !tx.isIncome).reduce((s, tx) => s + Number(tx.amount || 0), 0);
+                
+                const cardExpense = currMonthTx.filter(tx => !tx.isIncome && targetCards.some(c => c.name === tx.institution)).reduce((s, tx) => s + Number(tx.amount || 0), 0);
+                const otherExpense = expense - cardExpense;
+                
                 const cardPerf = targetCards.map(card => {
-                    const spent = targetTx.filter(tx => tx.date.startsWith(curYM) && tx.institution === card.name && !tx.isIncome && tx.isPerformanceEligible !== false)
+                    const spent = currMonthTx.filter(tx => tx.institution === card.name && !tx.isIncome && tx.isPerformanceEligible !== false)
                         .reduce((s, tx) => s + Number(tx.amount || 0), 0);
                     return { ...card, spent };
                 });
 
                 const catMap = {};
-                targetTx.filter(tx => !tx.isIncome).forEach(tx => { catMap[tx.category] = (catMap[tx.category] || 0) + Number(tx.amount || 0); });
+                currMonthTx.filter(tx => !tx.isIncome).forEach(tx => { catMap[tx.category] = (catMap[tx.category] || 0) + Number(tx.amount || 0); });
                 const COLORS = ['#6366f1', '#a855f7', '#ec4899', '#f43f5e', '#f59e0b', '#10b981', '#0ea5e9'];
                 const catStats = Object.keys(catMap).map((k, i) => ({ name: k, value: catMap[k], color: COLORS[i % COLORS.length] })).sort((a, b) => b.value - a.value);
                 const totalPie = catStats.reduce((s, i) => s + i.value, 0);
                 let cum = 0;
                 const stops = catStats.map(i => { const p = totalPie===0?0:(i.value / totalPie) * 100; const s = `${i.color} ${cum}% ${cum+p}%`; cum+=p; return s; }).join(', ');
 
-                return { filteredTx: targetTx, totalIncome: income, totalExpense: expense, balance: income - expense, catStats, conicStops: stops, upcomingSubs: [...targetSubs].sort((a,b)=>a.day-b.day), cardPerf, filteredInsts: targetInsts, filteredPayments: targetPayments };
+                return { filteredTx: targetTx, currMonthTx, totalIncome: income, totalExpense: expense, cardExpense, otherExpense, balance: income - expense, catStats, conicStops: stops, upcomingSubs: [...targetSubs].sort((a,b)=>a.day-b.day), cardPerf, filteredInsts: targetInsts, filteredPayments: targetPayments };
             }, [transactions, subscriptions, cardAccounts, installments, cardPayments, usageType, calendarDate]);
 
             const advices = useMemo(() => {
@@ -314,9 +337,11 @@
                     await addPayment({ id: Date.now(), date: inputDate, amount: Number(inputAmount), cardName: inputInstitution, description: inputDesc || `${inputInstitution} 대금 납부`, type: usageType });
                 } else {
                     if(!inputDesc || !inputInstitution) return alert('내용과 결제수단을 입력하세요.');
-                    await addTx({ id: Date.now(), date: inputDate, amount: Number(inputAmount), category: inputCategory, description: inputDesc, institution: inputInstitution, isIncome: inputType === 'income', type: usageType, isPerformanceEligible });
+                    const finalCategory = inputCategory === '기타' ? customCategory : inputCategory;
+                    if(inputCategory === '기타' && !customCategory) return alert('기타 카테고리명을 직접 입력하세요.');
+                    await addTx({ id: Date.now(), date: inputDate, amount: Number(inputAmount), category: finalCategory, description: inputDesc, institution: inputInstitution, isIncome: inputType === 'income', type: usageType, isPerformanceEligible });
                 }
-                setInputAmount(''); setInputDesc(''); setActiveTab('home');
+                setInputAmount(''); setInputDesc(''); setCustomCategory(''); setActiveTab('home');
             };
 
             const handleSaveEdit = (e) => { e.preventDefault(); updateTx(editFormData); alert('수정 완료!'); setEditFormData(null); };
@@ -337,27 +362,27 @@
                 setNewPasswordInput('');
             };
 
-            // --- 🖼️ 렌더링 ---
-            if (!authReady) {
-                return (
-                    <div className="h-screen flex items-center justify-center bg-indigo-50">
-                        <div className="flex flex-col items-center font-black text-indigo-600">
-                            <Icon name="loader-2" className="animate-spin mb-4" size={40} />
-                            클라우드 서버 연동 중...
-                        </div>
-                    </div>
-                );
-            }
+            const handleSaveColors = async (e) => {
+                e.preventDefault();
+                const settings = { t1: Number(colorT1), c1: colorC1, t2: Number(colorT2), c2: colorC2, c3: colorC3 };
+                if (window.fb) {
+                    const { db, appId, doc, setDoc } = window.fb;
+                    await setDoc(doc(db, `artifacts/${appId}/users/shared_admin`, 'settings', 'profile'), { ...userInfo, colorSettings: settings }, { merge: true });
+                }
+                setUserInfo({ ...userInfo, colorSettings: settings });
+                alert('지출 금액별 색상 설정이 완료되었습니다!');
+            };
 
-            if (!userInfo) return (
-                <div className="min-h-screen flex items-center justify-center p-4 bg-gray-100">
-                    <div className="w-full max-w-sm bg-white p-8 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 border border-gray-100">
-                        <div className="w-20 h-20 gradient-primary rounded-3xl flex items-center justify-center mx-auto mb-6 text-white shadow-lg"><Icon name="user-plus" size={32} /></div>
-                        <h1 className="text-2xl font-black mb-2 text-gray-900">환영합니다!</h1>
-                        <p className="text-xs text-gray-500 mb-8 font-medium leading-relaxed">나만의 안전한 클라우드 가계부를 위해<br/>최초 정보를 등록해주세요.</p>
-                        <form onSubmit={handleInitialSetup} className="space-y-4">
-                            <input name="username" placeholder="이름" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all font-bold outline-none" />
-                            <input name="phone" placeholder="연락처 (숫자만)" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all font-bold outline-none" />
+            const getAmountColor = (tx) => {
+                if (tx.isIncome) return '#2563eb'; // 수입은 파란색
+                const settings = userInfo?.colorSettings || { t1: 50000, c1: '#eab308', t2: 100000, c2: '#3b82f6', c3: '#ef4444' };
+                if (tx.amount <= settings.t1) return settings.c1;
+                if (tx.amount <= settings.t2) return settings.c2;
+                return settings.c3;
+            };
+
+            // 🚀 핵심: 새 창 열기 기능
+            const handleOpenNewWindow = () => {
                             <input name="password" type="password" placeholder="앱 비밀번호 4자리 설정" maxLength={4} required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all text-center font-black tracking-widest outline-none text-lg text-indigo-600" />
                             <button type="submit" className="w-full py-4 mt-4 gradient-primary text-white rounded-2xl font-black shadow-lg shadow-indigo-200 hover-scale text-lg tracking-tight">가계부 시작하기</button>
                         </form>
@@ -469,12 +494,63 @@
 
                                     <div className="gradient-card rounded-[2.5rem] p-8 text-white relative">
                                         <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
-                                        <p className="text-indigo-200 text-xs mb-2 font-bold flex items-center">이번 달 사용 가능 예산 <Icon name="chevron-right" size={14} className="ml-1 opacity-50"/></p>
-                                        <h2 className="text-4xl font-black mb-8 tracking-tighter">{formatKRW(stats.balance)}</h2>
+                                        <p className="text-indigo-200 text-xs mb-2 font-bold flex items-center">이번 달 총 지출 <Icon name="chevron-right" size={14} className="ml-1 opacity-50"/></p>
+                                        <h2 className="text-4xl font-black mb-8 tracking-tighter">{formatKRW(stats.totalExpense)}</h2>
                                         <div className="grid grid-cols-2 gap-4">
-                                            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20"><p className="text-[10px] text-indigo-200 font-black mb-1 uppercase tracking-widest">INCOME</p><p className="font-black text-white text-base">{formatKRW(stats.income)}</p></div>
-                                            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20"><p className="text-[10px] text-indigo-200 font-black mb-1 uppercase tracking-widest">EXPENSE</p><p className="font-black text-white text-base">{formatKRW(stats.expense)}</p></div>
+                                            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20"><p className="text-[10px] text-indigo-200 font-black mb-1 uppercase tracking-widest">카드 지출</p><p className="font-black text-white text-base">{formatKRW(stats.cardExpense)}</p></div>
+                                            <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20"><p className="text-[10px] text-indigo-200 font-black mb-1 uppercase tracking-widest">나머지 지출</p><p className="font-black text-white text-base">{formatKRW(stats.otherExpense)}</p></div>
                                         </div>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100">
+                                            <h3 className="text-sm font-black text-gray-900 flex items-center"><Icon name="list" size={18} className="mr-2 text-indigo-500"/>{selectedDateFilter?`${selectedDateFilter.substring(5)} 내역`:'이번 달 거래 내역'}</h3>
+                                            {selectedTxs.length > 0 && <button onClick={()=>executeBulkDelete('txs', selectedTxs, setSelectedTxs, bulkDeleteTxs)} className="text-[10px] bg-rose-50 text-rose-600 px-3 py-1.5 rounded-lg font-black hover-scale">선택 삭제 ({selectedTxs.length})</button>}
+                                        </div>
+                                        
+                                        {(() => {
+                                            const txsToGroup = selectedDateFilter ? stats.filteredTx.filter(t=>t.date===selectedDateFilter) : stats.currMonthTx;
+                                            const groupedTxs = {};
+                                            txsToGroup.forEach(tx => {
+                                                if (!groupedTxs[tx.date]) groupedTxs[tx.date] = [];
+                                                groupedTxs[tx.date].push(tx);
+                                            });
+                                            const sortedDates = Object.keys(groupedTxs).sort((a,b) => new Date(b) - new Date(a));
+
+                                            if(sortedDates.length === 0) return <div className="text-center text-xs text-gray-400 font-bold py-6 bg-gray-50 rounded-3xl">거래 내역이 없습니다.</div>;
+
+                                            return sortedDates.map(date => {
+                                                const isOpen = openDates[date] !== false; 
+                                                return (
+                                                    <div key={date} className="bg-white rounded-[2rem] shadow-sm border border-gray-100 overflow-hidden mb-4">
+                                                        <button onClick={()=>setOpenDates(p=>({...p, [date]: !(p[date] ?? true)}))} className="w-full px-5 py-4 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors">
+                                                            <span className="font-black text-gray-800 text-sm">{date}</span>
+                                                            <div className={`p-1 rounded-full bg-white shadow-sm transition-transform duration-300 ${isOpen?'rotate-180':''}`}><Icon name="chevron-down" size={14} className="text-gray-500"/></div>
+                                                        </button>
+                                                        {isOpen && (
+                                                            <div className="p-2 space-y-1">
+                                                                {groupedTxs[date].sort((a,b)=>b.id-a.id).map(tx=>(
+                                                                    <div key={tx.id} className="bg-white p-3 rounded-[1.5rem] flex items-center justify-between group hover:bg-gray-50 transition-colors">
+                                                                        <input type="checkbox" checked={selectedTxs.includes(tx.id)} onChange={()=>handleToggleSelect(tx.id, selectedTxs, setSelectedTxs)} className="custom-checkbox mr-3" style={{width:'1.2rem', height:'1.2rem'}} />
+                                                                        <div className="flex-1 overflow-hidden pr-2">
+                                                                            <div className="flex items-center gap-2 mb-1">
+                                                                                <p className="font-extrabold text-sm text-gray-900 truncate">{tx.description}</p>
+                                                                                {tx.isPerformanceEligible===false&&<span className="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-md font-bold shrink-0">실적제외</span>}
+                                                                            </div>
+                                                                            <p className="text-[10px] text-gray-400 font-bold truncate">{tx.category} · {tx.institution}</p>
+                                                                        </div>
+                                                                        <div className="text-right shrink-0">
+                                                                            <p style={{color: getAmountColor(tx)}} className="font-black text-base tracking-tight">{tx.isIncome?'+':'-'}{formatKRW(tx.amount)}</p>
+                                                                            <button onClick={()=>setEditFormData(tx)} className="text-gray-300 hover:text-indigo-600 mt-1 transition-colors p-1"><Icon name="pencil" size={14}/></button>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
                                     </div>
 
                                     {stats.cardPerf.some(c=>c.targetAmount>0) && (
@@ -552,17 +628,14 @@
                                                     </select>
                                                 </div>
                                                 <div className="w-full"><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Category</label>
-                                                    <select value={inputCategory} onChange={(e)=>setInputCategory(e.target.value)} className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800">
-                                                        {inputType==='expense' ? <><option value="식비">식비</option><option value="쇼핑">쇼핑</option><option value="교통">교통</option><option value="주거">주거/통신</option><option value="관리비">관리비/세금</option></> : <><option value="급여">급여</option><option value="매출">매출</option><option value="용돈">용돈</option></>}
+                                                    <select value={inputCategory} onChange={(e)=>{setInputCategory(e.target.value); if(e.target.value!=='기타') setCustomCategory('');}} className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800">
+                                                        {inputType==='expense' ? <><option value="식비">식비</option><option value="쇼핑">쇼핑</option><option value="교통">교통</option><option value="주거">주거/통신</option><option value="관리비">관리비/세금</option><option value="생활">생활</option><option value="기타">기타 (직접입력)</option></> : <><option value="급여">급여</option><option value="매출">매출</option><option value="용돈">용돈</option><option value="기타">기타 (직접입력)</option></>}
                                                     </select>
+                                                    {inputCategory === '기타' && (
+                                                        <input type="text" value={customCategory} onChange={(e)=>setCustomCategory(e.target.value)} placeholder="카테고리 직접 입력" className="w-full mt-3 p-4 bg-white rounded-2xl border-2 border-indigo-100 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required />
+                                                    )}
                                                 </div>
                                             </div>
-                                        )}
-                                        {inputType==='expense'&&cardAccounts.some(c=>c.name===inputInstitution)&&(
-                                            <label className="flex items-center gap-4 p-5 bg-indigo-50 rounded-2xl text-xs font-black text-indigo-900 cursor-pointer transition-all active:bg-indigo-100 border border-indigo-100/50 hover-scale">
-                                                <input type="checkbox" checked={isPerformanceEligible} onChange={(e)=>setIsPerformanceEligible(e.target.checked)} className="custom-checkbox border-indigo-300"/> 
-                                                카드 혜택 실적 인정 항목
-                                            </label>
                                         )}
                                         <div><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Memo</label><input type="text" value={inputDesc} onChange={(e)=>setInputDesc(e.target.value)} placeholder="예: 점심 식사" className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required /></div>
                                         <button type="submit" className="w-full py-5 gradient-primary text-white rounded-[2rem] font-black text-xl shadow-xl shadow-indigo-200 hover-scale mt-4">기록 저장하기</button>
@@ -693,6 +766,29 @@
                                     </div>
                                     
                                     <div className="bg-white p-7 rounded-[3rem] shadow-sm border border-gray-100">
+                                        <h3 className="font-black text-sm mb-6 flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center mr-3"><Icon name="palette" size={16}/></span>지출 금액별 색상 설정</h3>
+                                        <form onSubmit={handleSaveColors} className="space-y-4 bg-gray-50 p-5 rounded-[2rem]">
+                                            <div className="flex items-center gap-3">
+                                                <input type="number" value={colorT1} onChange={(e)=>setColorT1(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border-0 shadow-sm focus:ring-2 focus:ring-orange-200 outline-none" required />
+                                                <span className="text-xs font-black text-gray-500 whitespace-nowrap">원 이하</span>
+                                                <input type="color" value={colorC1} onChange={(e)=>setColorC1(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <input type="number" value={colorT2} onChange={(e)=>setColorT2(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border-0 shadow-sm focus:ring-2 focus:ring-orange-200 outline-none" required />
+                                                <span className="text-xs font-black text-gray-500 whitespace-nowrap">원 이하</span>
+                                                <input type="color" value={colorC2} onChange={(e)=>setColorC2(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className="flex-1 p-3 bg-white/50 rounded-xl text-xs font-bold text-gray-400 border border-gray-100">그 이상 (초과) 금액</span>
+                                                <input type="color" value={colorC3} onChange={(e)=>setColorC3(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
+                                            </div>
+                                            <button type="submit" className="w-full py-4 bg-gray-900 text-white rounded-xl font-black shadow-md hover:bg-gray-800 active:scale-95 transition-all mt-2">색상 적용하기</button>
+                                        </form>
+                                    </div>
+
+                                    <div className="bg-white p-7 rounded-[3rem] shadow-sm border border-gray-100">
+                                        <div className="flex justify-between mb-6 items-center">
+                                            <h3 className="font-black text-sm flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-teal-50 text-teal-500 flex items-center justify-center mr-3"><Icon name="receipt" size={16}/></span>대금 납부 역사</h3>
                                         <h3 className="font-black text-sm mb-6 flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center mr-3"><Icon name="lock" size={16}/></span>앱 잠금 비밀번호 변경</h3>
                                         <form onSubmit={handleChangePassword} className="space-y-4 bg-gray-50 p-5 rounded-[2rem]">
                                             <input name="curpwd" type="password" value={currentPasswordInput} onChange={(e)=>setCurrentPasswordInput(e.target.value)} placeholder="현재 비밀번호 입력" className="w-full p-4 bg-white rounded-xl text-sm border-0 font-black tracking-widest text-center focus:ring-2 focus:ring-rose-200 outline-none shadow-sm" required />
