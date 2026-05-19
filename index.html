@@ -15,7 +15,6 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 대표님이 직접 만드신 파이어베이스 설정값
         const firebaseConfig = {
             apiKey: "AIzaSyAfgK1iOoEsDyR7fNif6g7vDk2R7y1gIDg",
             authDomain: "billcheck-app.firebaseapp.com",
@@ -59,9 +58,9 @@
         .hover-scale:active { transform: scale(0.96); }
 
         /* 모바일 친화적 커스텀 체크박스 */
-        .custom-checkbox { width: 1.5rem; height: 1.5rem; border-radius: 0.5rem; border: 2px solid #cbd5e1; appearance: none; outline: none; cursor: pointer; transition: all 0.2s; position: relative; flex-shrink: 0; background: white; }
+        .custom-checkbox { width: 1.25rem; height: 1.25rem; border-radius: 0.375rem; border: 2px solid #cbd5e1; appearance: none; outline: none; cursor: pointer; transition: all 0.2s; position: relative; flex-shrink: 0; background: white; }
         .custom-checkbox:checked { background-color: #6366f1; border-color: #6366f1; }
-        .custom-checkbox:checked::after { content: ''; position: absolute; left: 7px; top: 3px; width: 6px; height: 12px; border: solid white; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }
+        .custom-checkbox:checked::after { content: ''; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
     </style>
 </head>
 <body>
@@ -95,7 +94,7 @@
             return [value, setValue];
         }
 
-        // 실시간 동기화 훅 (공통 장부 'shared_admin' 사용)
+        // 공통 장부 'shared_admin' 사용
         function useDataSync(colName, authReady, initialValue) {
             const [data, setData] = useState(initialValue);
 
@@ -176,12 +175,28 @@
             const [installments, addInst, updateInst, deleteInst, bulkDeleteInsts] = useDataSync('insts', authReady, []);
             const [cardPayments, addPayment, updatePayment, deletePayment, bulkDeletePayments] = useDataSync('payments', authReady, []);
 
-            // 프로필 정보 동기화
+            // 색상 설정 상태
+            const [colorT1, setColorT1] = useState(50000);
+            const [colorC1, setColorC1] = useState('#eab308');
+            const [colorT2, setColorT2] = useState(100000);
+            const [colorC2, setColorC2] = useState('#3b82f6');
+            const [colorC3, setColorC3] = useState('#ef4444');
+
             useEffect(() => {
                 if (!window.fb) return;
                 const { db, appId, doc, onSnapshot } = window.fb;
                 const unsub = onSnapshot(doc(db, 'artifacts', appId, 'users', 'shared_admin', 'settings', 'profile'), (snap) => {
-                    if (snap.exists()) setUserInfo(snap.data());
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        setUserInfo(data);
+                        if (data.colorSettings) {
+                            setColorT1(data.colorSettings.t1);
+                            setColorC1(data.colorSettings.c1);
+                            setColorT2(data.colorSettings.t2);
+                            setColorC2(data.colorSettings.c2);
+                            setColorC3(data.colorSettings.c3);
+                        }
+                    }
                 });
                 return () => unsub();
             }, []);
@@ -200,7 +215,7 @@
             const [inputInstitution, setInputInstitution] = useState('');
             const [isPerformanceEligible, setIsPerformanceEligible] = useState(true);
             const [customCategory, setCustomCategory] = useState('');
-            const [openDates, setOpenDates] = useState({});
+            
             const [newCardName, setNewCardName] = useState('');
             const [newCardDay, setNewCardDay] = useState('');
             const [newCardTarget, setNewCardTarget] = useState('');
@@ -215,27 +230,13 @@
             const [currentPasswordInput, setCurrentPasswordInput] = useState('');
             const [newPasswordInput, setNewPasswordInput] = useState('');
             
-            const [colorT1, setColorT1] = useState(50000);
-            const [colorC1, setColorC1] = useState('#eab308');
-            const [colorT2, setColorT2] = useState(100000);
-            const [colorC2, setColorC2] = useState('#3b82f6');
-            const [colorC3, setColorC3] = useState('#ef4444');
-
-            useEffect(() => {
-                if (userInfo?.colorSettings) {
-                    setColorT1(userInfo.colorSettings.t1);
-                    setColorC1(userInfo.colorSettings.c1);
-                    setColorT2(userInfo.colorSettings.t2);
-                    setColorC2(userInfo.colorSettings.c2);
-                    setColorC3(userInfo.colorSettings.c3);
-                }
-            }, [userInfo]);
-            
             const [selectedTxs, setSelectedTxs] = useState([]);
             const [selectedSubs, setSelectedSubs] = useState([]);
             const [selectedInsts, setSelectedInsts] = useState([]);
             const [selectedCards, setSelectedCards] = useState([]);
             const [selectedPayments, setSelectedPayments] = useState([]);
+            
+            const [openDates, setOpenDates] = useState({});
 
             const formatKRW = (v) => new Intl.NumberFormat('ko-KR').format(v || 0) + '원';
 
@@ -281,7 +282,7 @@
                     if (c.targetAmount > 0) {
                         const ratio = c.spent / c.targetAmount;
                         if (ratio >= 0.8 && ratio < 1) res.push({ type: 'tip', text: `✨ ${c.name} 혜택 달성 임박! (${formatKRW(c.targetAmount - c.spent)} 남음)` });
-                        else if (ratio >= 1) res.push({ type: 'success', text: `🎉 ${c.name} 실적 달성 완료! 혜택을 누리세요.` });
+                        else if (ratio >= 1) res.push({ type: 'success', text: `🎉 ${c.name} 실적 달성 완료! 다른 카드를 써보세요.` });
                     }
                 });
                 const finInsts = stats.filteredInsts.filter(i => (i.totalMonths - i.paidMonths) > 0 && (i.totalMonths - i.paidMonths) <= 3);
@@ -296,7 +297,7 @@
                 const data = { name: e.target.username.value, phone: e.target.phone.value };
                 if (window.fb) {
                     const { db, appId, doc, setDoc } = window.fb;
-                    await setDoc(doc(db, `artifacts/${appId}/users/shared_admin`, 'settings', 'profile'), data);
+                    await setDoc(doc(db, `artifacts/${appId}/users/shared_admin`, 'settings', 'profile'), data, { merge: true });
                 }
                 setUserInfo(data);
                 setSavedPassword(e.target.password.value);
@@ -374,7 +375,7 @@
             };
 
             const getAmountColor = (tx) => {
-                if (tx.isIncome) return '#2563eb'; // 수입은 파란색
+                if (tx.isIncome) return '#2563eb';
                 const settings = userInfo?.colorSettings || { t1: 50000, c1: '#eab308', t2: 100000, c2: '#3b82f6', c3: '#ef4444' };
                 if (tx.amount <= settings.t1) return settings.c1;
                 if (tx.amount <= settings.t2) return settings.c2;
@@ -383,6 +384,30 @@
 
             // 🚀 핵심: 새 창 열기 기능
             const handleOpenNewWindow = () => {
+                window.open(window.location.href, '_blank');
+            };
+
+            // --- 🖼️ 렌더링 ---
+            if (!authReady) {
+                return (
+                    <div className="h-screen flex items-center justify-center bg-indigo-50">
+                        <div className="flex flex-col items-center font-black text-indigo-600">
+                            <Icon name="loader-2" className="animate-spin mb-4" size={40} />
+                            클라우드 서버 연동 중...
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!userInfo) return (
+                <div className="min-h-screen flex items-center justify-center p-4 bg-gray-100">
+                    <div className="w-full max-w-sm bg-white p-8 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 border border-gray-100">
+                        <div className="w-20 h-20 gradient-primary rounded-3xl flex items-center justify-center mx-auto mb-6 text-white shadow-lg"><Icon name="user-plus" size={32} /></div>
+                        <h1 className="text-2xl font-black mb-2 text-gray-900">환영합니다!</h1>
+                        <p className="text-xs text-gray-500 mb-8 font-medium leading-relaxed">나만의 안전한 클라우드 가계부를 위해<br/>최초 정보를 등록해주세요.</p>
+                        <form onSubmit={handleInitialSetup} className="space-y-4">
+                            <input name="username" placeholder="이름" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all font-bold outline-none" />
+                            <input name="phone" placeholder="연락처 (숫자만)" required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all font-bold outline-none" />
                             <input name="password" type="password" placeholder="앱 비밀번호 4자리 설정" maxLength={4} required className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 transition-all text-center font-black tracking-widest outline-none text-lg text-indigo-600" />
                             <button type="submit" className="w-full py-4 mt-4 gradient-primary text-white rounded-2xl font-black shadow-lg shadow-indigo-200 hover-scale text-lg tracking-tight">가계부 시작하기</button>
                         </form>
@@ -570,29 +595,6 @@
                                         </div>
                                     )}
 
-                                    <div className="space-y-4">
-                                        <div className="flex justify-between items-center bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100">
-                                            <h3 className="text-sm font-black text-gray-900 flex items-center"><Icon name="list" size={18} className="mr-2 text-indigo-500"/>{selectedDateFilter?`${selectedDateFilter.substring(5)} 내역`:'최근 거래 내역'}</h3>
-                                            {selectedTxs.length > 0 && <button onClick={()=>executeBulkDelete('txs', selectedTxs, setSelectedTxs, bulkDeleteTxs)} className="text-[10px] bg-rose-50 text-rose-600 px-3 py-1.5 rounded-lg font-black hover-scale">선택 삭제 ({selectedTxs.length})</button>}
-                                        </div>
-                                        
-                                        {(selectedDateFilter ? stats.filteredTx.filter(t=>t.date===selectedDateFilter) : stats.filteredTx).sort((a,b)=>b.id-a.id).slice(0, 30).map(tx=>(
-                                            <div key={tx.id} className="bg-white p-4 rounded-[2rem] shadow-sm flex items-center justify-between hover-scale group border border-gray-50">
-                                                <input type="checkbox" checked={selectedTxs.includes(tx.id)} onChange={()=>handleToggleSelect(tx.id, selectedTxs, setSelectedTxs)} className="custom-checkbox mr-3" />
-                                                <div className="flex-1 overflow-hidden pr-2">
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <p className="font-extrabold text-sm text-gray-900 truncate">{tx.description}</p>
-                                                        {tx.isPerformanceEligible===false&&<span className="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-md font-bold shrink-0">실적제외</span>}
-                                                    </div>
-                                                    <p className="text-[10px] text-gray-400 font-bold truncate">{tx.date} · {tx.institution}</p>
-                                                </div>
-                                                <div className="text-right shrink-0">
-                                                    <p className={`font-black text-base tracking-tight ${tx.isIncome?'text-blue-600':'text-gray-900'}`}>{tx.isIncome?'+':'-'}{formatKRW(tx.amount)}</p>
-                                                    <button onClick={()=>setEditFormData(tx)} className="text-gray-300 hover:text-indigo-600 mt-1 transition-colors p-1"><Icon name="pencil" size={14}/></button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
                                 </div>
                             )}
 
@@ -636,6 +638,12 @@
                                                     )}
                                                 </div>
                                             </div>
+                                        )}
+                                        {inputType==='expense'&&cardAccounts.some(c=>c.name===inputInstitution)&&(
+                                            <label className="flex items-center gap-4 p-5 bg-indigo-50 rounded-2xl text-xs font-black text-indigo-900 cursor-pointer transition-all active:bg-indigo-100 border border-indigo-100/50 hover-scale">
+                                                <input type="checkbox" checked={isPerformanceEligible} onChange={(e)=>setIsPerformanceEligible(e.target.checked)} className="custom-checkbox border-indigo-300"/> 
+                                                카드 혜택 실적 인정 항목
+                                            </label>
                                         )}
                                         <div><label className="block text-[11px] font-black text-gray-400 mb-2 ml-2 uppercase tracking-wider">Memo</label><input type="text" value={inputDesc} onChange={(e)=>setInputDesc(e.target.value)} placeholder="예: 점심 식사" className="w-full p-4 bg-gray-50 rounded-2xl border-2 border-transparent focus:bg-white focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 font-bold outline-none transition-all text-gray-800" required /></div>
                                         <button type="submit" className="w-full py-5 gradient-primary text-white rounded-[2rem] font-black text-xl shadow-xl shadow-indigo-200 hover-scale mt-4">기록 저장하기</button>
@@ -720,6 +728,38 @@
                             {activeTab === 'assets' && (
                                 <div className="space-y-8 animate-in slide-in-from-right-4 duration-300">
                                     <h2 className="text-3xl font-black text-gray-900 mb-8 tracking-tight pl-2">설정 및 관리</h2>
+                                    
+                                    <div className="gradient-primary p-7 rounded-[3rem] shadow-xl text-white relative overflow-hidden">
+                                        <div className="absolute top-0 right-0 w-32 h-32 bg-white opacity-20 rounded-full blur-2xl"></div>
+                                        <h3 className="font-black text-xl mb-2 flex items-center relative z-10"><Icon name="external-link" className="mr-2"/> 폰에서 실시간 연동하기</h3>
+                                        <p className="text-[11px] text-indigo-100 mb-4 font-bold leading-relaxed relative z-10">
+                                            아래 버튼을 눌러 새 창을 열고, 뜬 창의 주소를 휴대폰으로 보내면 실시간 연동됩니다.
+                                        </p>
+                                        <button onClick={handleOpenNewWindow} className="w-full bg-white text-indigo-600 py-4 rounded-2xl font-black text-base shadow-lg hover-scale relative z-10">🚀 새 창으로 열기 (주소 복사용)</button>
+                                    </div>
+
+                                    <div className="bg-white p-7 rounded-[3rem] border border-gray-100 shadow-sm">
+                                        <div className="flex justify-between mb-6 items-center">
+                                            <h3 className="font-black text-sm flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center mr-3"><Icon name="palette" size={16}/></span>지출 금액별 색상 설정</h3>
+                                        </div>
+                                        <form onSubmit={handleSaveColors} className="space-y-4 bg-gray-50 p-5 rounded-[2rem]">
+                                            <div className="flex items-center gap-3">
+                                                <input type="number" value={colorT1} onChange={(e)=>setColorT1(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border-0 shadow-sm focus:ring-2 focus:ring-orange-200 outline-none" required />
+                                                <span className="text-xs font-black text-gray-500 whitespace-nowrap">원 이하</span>
+                                                <input type="color" value={colorC1} onChange={(e)=>setColorC1(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <input type="number" value={colorT2} onChange={(e)=>setColorT2(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border-0 shadow-sm focus:ring-2 focus:ring-orange-200 outline-none" required />
+                                                <span className="text-xs font-black text-gray-500 whitespace-nowrap">원 이하</span>
+                                                <input type="color" value={colorC2} onChange={(e)=>setColorC2(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className="flex-1 p-3 bg-white/50 rounded-xl text-xs font-bold text-gray-400 border border-gray-100">그 이상 (초과) 금액</span>
+                                                <input type="color" value={colorC3} onChange={(e)=>setColorC3(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
+                                            </div>
+                                            <button type="submit" className="w-full py-4 bg-gray-900 text-white rounded-xl font-black shadow-md hover:bg-gray-800 active:scale-95 transition-all mt-2">색상 적용하기</button>
+                                        </form>
+                                    </div>
 
                                     <div className="bg-white p-7 rounded-[2.5rem] shadow-sm border border-gray-100">
                                         <div className="flex justify-between mb-6 items-center">
@@ -766,29 +806,6 @@
                                     </div>
                                     
                                     <div className="bg-white p-7 rounded-[3rem] shadow-sm border border-gray-100">
-                                        <h3 className="font-black text-sm mb-6 flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center mr-3"><Icon name="palette" size={16}/></span>지출 금액별 색상 설정</h3>
-                                        <form onSubmit={handleSaveColors} className="space-y-4 bg-gray-50 p-5 rounded-[2rem]">
-                                            <div className="flex items-center gap-3">
-                                                <input type="number" value={colorT1} onChange={(e)=>setColorT1(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border-0 shadow-sm focus:ring-2 focus:ring-orange-200 outline-none" required />
-                                                <span className="text-xs font-black text-gray-500 whitespace-nowrap">원 이하</span>
-                                                <input type="color" value={colorC1} onChange={(e)=>setColorC1(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <input type="number" value={colorT2} onChange={(e)=>setColorT2(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border-0 shadow-sm focus:ring-2 focus:ring-orange-200 outline-none" required />
-                                                <span className="text-xs font-black text-gray-500 whitespace-nowrap">원 이하</span>
-                                                <input type="color" value={colorC2} onChange={(e)=>setColorC2(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <span className="flex-1 p-3 bg-white/50 rounded-xl text-xs font-bold text-gray-400 border border-gray-100">그 이상 (초과) 금액</span>
-                                                <input type="color" value={colorC3} onChange={(e)=>setColorC3(e.target.value)} className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent p-0" />
-                                            </div>
-                                            <button type="submit" className="w-full py-4 bg-gray-900 text-white rounded-xl font-black shadow-md hover:bg-gray-800 active:scale-95 transition-all mt-2">색상 적용하기</button>
-                                        </form>
-                                    </div>
-
-                                    <div className="bg-white p-7 rounded-[3rem] shadow-sm border border-gray-100">
-                                        <div className="flex justify-between mb-6 items-center">
-                                            <h3 className="font-black text-sm flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-teal-50 text-teal-500 flex items-center justify-center mr-3"><Icon name="receipt" size={16}/></span>대금 납부 역사</h3>
                                         <h3 className="font-black text-sm mb-6 flex items-center text-gray-800"><span className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center mr-3"><Icon name="lock" size={16}/></span>앱 잠금 비밀번호 변경</h3>
                                         <form onSubmit={handleChangePassword} className="space-y-4 bg-gray-50 p-5 rounded-[2rem]">
                                             <input name="curpwd" type="password" value={currentPasswordInput} onChange={(e)=>setCurrentPasswordInput(e.target.value)} placeholder="현재 비밀번호 입력" className="w-full p-4 bg-white rounded-xl text-sm border-0 font-black tracking-widest text-center focus:ring-2 focus:ring-rose-200 outline-none shadow-sm" required />
